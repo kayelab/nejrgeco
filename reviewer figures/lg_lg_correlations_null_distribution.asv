@@ -1,0 +1,135 @@
+%% LOAD IN TIF FILE
+clear;
+addpath(genpath('H:\nejrgeco_code_for_publication'));
+
+% set variables to iterate through 
+smooth_kernel = 15;
+px_to_micron = [1.47 1.47 0.74 0.74 0.74 0.74 0.74 0.74 0.74 0.74 0.74 0.74];
+times = [5 5 5 5 5 5 10 5 5 5 5 10];
+mice = {'PrL2.1', 'PrL2.1', 'PrL3.2', 'PrL3.2', 'PrL3.2', 'PrL3.2', 'PrL3.2', 'PrL3.4', 'PrL3.4', 'PrL3.4', 'PrL3.4', 'PrL3.4'};
+runs = {'2', '4', '1', '2', '3', '4', '5', '1', '2', '3', '4', '5'};
+condition = 'saline';
+
+for z = 2
+    time = times(z);
+    mouse = mice{z}
+    run = runs{z}
+    px_mc = px_to_micron(z);
+
+    % get a list of files
+    addpath(genpath(['H:\' mouse]));
+    jRGECO_files = dir(fullfile(['H:\' mouse '\' mouse ' tif images\'], ['*' condition '*run' run '*jRGECO*' ]));
+    jRGECO_files = {jRGECO_files.name};
+    GRABNE_files =  dir(fullfile(['H:\' mouse '\' mouse ' tif images\'], ['*' condition '*run' run '*GRABNE*' ]));
+    GRABNE_files = {GRABNE_files.name};
+    
+    % load in raw green and red movie (gr, rr)
+    sframe = 301;
+            switch time
+                case 5
+                    tiffile_g  = GRABNE_files{1};
+                    tiffile_r = jRGECO_files{1};
+                    [gr, ~, long_gr, ~] = loadrdz(tiffile_g, sframe);
+                    [rr, ~, long_rr, ~] = loadrdz(tiffile_r, sframe);
+                    filtered_green = double(gr);
+                case 10
+                    tiffile_g  = GRABNE_files{1}
+                    tiffile_g2  = GRABNE_files{2}
+                    tiffile_r  = jRGECO_files{1}
+                    tiffile_r2  = jRGECO_files{2}
+                    [gr1, ~, long_gr1, ~] = loadrdz(tiffile_g, sframe);
+                    [gr2, ~, long_gr2, ~] = loadrdz(tiffile_g2, sframe);
+                    gr = cat(3, gr1, gr2); clear gr1 gr2
+                    gr = double(gr);
+                    long_gr = cat(2, long_gr1, long_gr2); clear long_gr1 long_gr2
+    
+                    [rr1, ~, long_rr1, ~] = loadrdz(tiffile_r, sframe);
+                    [rr2, ~, long_rr2, ~] = loadrdz(tiffile_r2, sframe);
+                    rr = cat(3, rr1, rr2); clear rr1 rr2
+                    rr = double(rr);
+                    long_rr = cat(2, long_rr1, long_rr2); clear long_rr1 long_rr2
+            end
+end 
+
+%% MAKE RANDOM DISTRIBUTION AND PLOT
+
+% set all_corr matrix
+all_corr = [];
+
+% repeat procedure 10 times
+for k = 1:10
+
+    % set empty matrix for random green donuts
+    gdo_matrix = zeros(4200, 23);
+    
+    for i = 1:23
+        % make random donut mask
+        x = randi([20, 236]);
+        y = randi([20, 236]);
+        a = createCirclesMask([256, 256], [x, y], 15);
+        b = createCirclesMask([256, 256], [x, y], 5);
+        donut = a-b;
+        
+        % get donut green and red time series
+        donut = logical(reshape(donut, [], 1));
+        red = mean(long_rr(donut,:))';
+        green = mean(long_gr(donut, :))';
+    
+        % process the target patch
+        [~,~, target_px,~,~] = regress(reshape((green-mean(green)), [length(green),1]), [ ones(length(red), 1) reshape((red-mean(red)), [length(red), 1]) ]);
+        target_px = smooth(zscore(detrend(target_px)), smooth_kernel/length(target_px)); 
+    
+        % add to matrix
+        gdo_matrix(:, i) = target_px;
+    end
+    
+    gdo_corr = corrcoef(gdo_matrix); gdo_corr = triu(gdo_corr, 1); gdo_corr = gdo_corr(find(gdo_corr)); 
+    all_corr = [all_corr; gdo_corr];
+end
+
+%% Get actual local/local correlations
+
+D = 'H:\PrL*\*GLM predictors*\*reg2_*sal*';
+files = dir(fullfile(D, '*.csv'));
+addpath(genpath('H:\PrL2.1')); addpath(genpath('H:\PrL3.2')); addpath(genpath('H:\PrL3.4')); addpath(genpath('H:\samira_nejrgeco'));
+all_names = cell(size(files,1), 1);
+for i = 1:length(all_names)
+    all_names{i} = [files(i).folder '\' files(i).name];
+end
+
+within_group_correlations_sal = [];
+run_names = cellfun(@(x)x(50:60), all_names, 'UniformOutput', false);
+unique_run_names = unique(run_names);
+lg_lg_sal = []
+for i = 1:length(unique_run_names)
+    file_names = all_names(contains(all_names, unique_run_names{i}));
+    all_lg = [];
+    for k = 1:length(file_names)
+        T = readtable(file_names{k});
+        all_lg = [all_lg T.green_donut];
+    end
+    cor_pairs = corr(all_lg);
+    lg_lg_sal = [lg_lg_sal cor_pairs(find(tril(cor_pairs, -1) ~= 0))'];
+end
+
+%%
+
+% Get cumulative distribution
+[f_null,x_null] = ecdf(all_corr);
+[f_sal,x_sal] = ecdf(lg_lg_sal);
+
+% plot
+figure;
+plot(x_null, f_null, 'LineWidth', 2, 'Color', [0.5 0.5 0.5]);
+hold on;
+plot(x_sal, f_sal, 'LineWidth', 2, 'Color', 'k', 'LineStyle', '--');
+
+% figure properties
+set(gca, 'TickDir', 'out');
+xlim([-0.25, 1]); xticks([-0.25, 0, 0.25, 0.5, 0.75, 1]);
+yl
+
+title('cumulative density local/local green random donuts', 'FontSize', 12);
+xlabel('correlation', 'FontSize', 14);
+ylabel('cumulative fraction', 'FontSize', 14);
+
